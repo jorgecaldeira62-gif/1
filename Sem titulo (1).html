@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Editor & Montador Modular de HTML com Supabase e ZIP</title>
+  <!-- JSZip para importação e exportação de projetos ZIP -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- Tailwind CSS para visual moderno -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .tree-item:hover { background-color: #334155; }
+    .tree-item.active { background-color: #1e293b; border-left: 3px solid #3b82f6; }
+    .tab-btn.active { background-color: #0f172a; border-top: 2px solid #3b82f6; color: #f8fafc; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 h-screen flex flex-col overflow-hidden">
+
+  <!-- BARRA DE TOPO -->
+  <header class="bg-slate-900 border-b border-slate-800 px-4 py-2.5 flex items-center justify-between shrink-0">
+    <div class="flex items-center space-x-3">
+      <span class="text-xl">🛠️</span>
+      <input type="text" id="project-name" value="Meu_Projeto_Juridico" class="bg-slate-800 border border-slate-700 text-slate-200 text-sm font-semibold rounded px-2 py-1 focus:outline-none focus:border-blue-500">
+      <span class="text-xs text-emerald-400 bg-emerald-950/80 border border-emerald-800/80 px-2 py-0.5 rounded" id="save-indicator">Auto-Save Ativo (IndexedDB)</span>
+    </div>
+
+    <!-- Ações Principais -->
+    <div class="flex items-center space-x-2">
+      <input type="file" id="zip-input" accept=".zip" class="hidden" onchange="importZip(event)">
+      <button onclick="document.getElementById('zip-input').click()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs px-3 py-1.5 rounded transition flex items-center gap-1.5">
+        📂 Importar ZIP
+      </button>
+      <button onclick="exportZip()" class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium px-3 py-1.5 rounded transition flex items-center gap-1.5">
+        📦 Exportar ZIP
+      </button>
+      <button onclick="unifyAndExportHTML()" class="bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium px-3 py-1.5 rounded transition flex items-center gap-1.5" title="Une todos os arquivos e o Supabase em um HTML único">
+        ⚡ Exportar HTML Único
+      </button>
+    </div>
+  </header>
+
+  <!-- ÁREA DE TRABALHO -->
+  <div class="flex-1 flex overflow-hidden">
+
+    <!-- PAINEL ESQUERDO: ÁRVORE DE ARQUIVOS -->
+    <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0">
+      <div class="p-3 border-b border-slate-800 flex items-center justify-between">
+        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Explorador</span>
+        <div class="flex items-center space-x-1">
+          <button onclick="promptCreateFile()" class="p-1 hover:bg-slate-800 rounded text-slate-300 text-xs" title="Novo Arquivo">+ Arquivo</button>
+          <button onclick="promptCreateFolder()" class="p-1 hover:bg-slate-800 rounded text-slate-300 text-xs" title="Nova Pasta">+ Pasta</button>
+        </div>
+      </div>
+
+      <!-- Lista da Árvore de Arquivos -->
+      <div id="file-tree" class="flex-1 overflow-y-auto p-2 text-xs font-mono space-y-0.5">
+        <!-- Renderizado via JS -->
+      </div>
+    </aside>
+
+    <!-- PAINEL CENTRAL E DIREITO -->
+    <main class="flex-1 flex flex-col min-w-0 bg-slate-950">
+
+      <!-- BARRA DE ABAS DINÂMICAS -->
+      <div id="tabs-bar" class="bg-slate-900 border-b border-slate-800 flex items-center overflow-x-auto shrink-0 text-xs font-mono">
+        <!-- Abas renderizadas via JS -->
+      </div>
+
+      <!-- EDITOR DE CÓDIGO -->
+      <div class="flex-1 relative flex flex-col min-h-0">
+        <textarea id="code-editor" class="w-full h-full bg-slate-950 text-slate-200 p-4 font-mono text-sm leading-relaxed resize-none focus:outline-none border-none" placeholder="Selecione um arquivo para editar..." oninput="onEditorInput()"></textarea>
+      </div>
+
+      <!-- BARRA DO PREVIEW -->
+      <div id="preview-panel" class="h-1/2 border-t-2 border-blue-600 flex flex-col bg-white transition-all duration-300">
+        <div class="bg-slate-900 text-slate-300 px-3 py-1.5 flex items-center justify-between border-b border-slate-800 shrink-0 text-xs">
+          <div class="flex items-center space-x-2">
+            <span class="font-bold text-blue-400">Preview Vivo (Smart Assembler)</span>
+            <span class="text-slate-500">|</span>
+            <span class="text-slate-400 text-[11px]" id="preview-status">Sincronizado automaticamente</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <button onclick="updatePreview()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-0.5 rounded text-xs transition">
+              🔄 Recarregar
+            </button>
+            <button onclick="toggleMaximizePreview()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-0.5 rounded text-xs transition" id="max-btn">
+              🗖 Maximizar
+            </button>
+          </div>
+        </div>
+
+        <!-- iframe de Execução em Tempo Real -->
+        <iframe id="preview-frame" class="w-full flex-1 border-none bg-white"></iframe>
+      </div>
+
+    </main>
+
+  </div>
+
+  <!-- SCRIPT DE GERENCIAMENTO DA APLICAÇÃO -->
+  <script>
+    // Estrutura do Projeto Virtual (Suporta Pastas e Arquivos)
+    let project = {
+      'index.html': `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>
+  <script src="supabase.js"><\/script>
+</head>
+<body>
+  <h1>Meu Playground Jurídico</h1>
+  <p>Edite os arquivos ou importe um ZIP para testar!</p>
+  <button onclick="testarConexao()">Testar Supabase</button>
+  <script src="script.js"><\/script>
+</body>
+</html>`,
+      'style.css': `body { font-family: sans-serif; padding: 20px; background: #f8fafc; color: #0f172a; }
+h1 { color: #2563eb; }`,
+      'script.js': `console.log("Projeto iniciado!");`,
+      'supabase.js': `// Configuração do Supabase
+const SUPABASE_URL = "https://seu-projeto.supabase.co";
+const SUPABASE_KEY = "sua-chave-anon";
+
+let supabase = null;
+if (typeof supabase !== 'undefined' && supabase.createClient) {
+  supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+}
+
+function testarConexao() {
+  alert("Testando conexão com Supabase...");
+}`,
+      'components/header.html': `<header><h2>Módulo de Cabeçalho</h2></header>`
+    };
+
+    let activeFile = 'index.html';
+    let openTabs = ['index.html'];
+
+    window.onload = () => {
+      loadProjectFromDB();
+    };
+
+    // --- GERENCIAMENTO DE ARQUIVOS E PASTAS ---
+    function renderTree() {
+      const treeContainer = document.getElementById('file-tree');
+      treeContainer.innerHTML = '';
+
+      const paths = Object.keys(project).sort();
+
+      paths.forEach(filePath => {
+        const div = document.createElement('div');
+        const isActive = filePath === activeFile;
+        div.className = `tree-item flex items-center justify-between px-2 py-1 rounded cursor-pointer select-none text-slate-300 ${isActive ? 'active' : ''}`;
+        
+        div.innerHTML = `
+          <div class="flex items-center space-x-1.5 truncate flex-1" onclick="selectFile('${filePath}')">
+            <span>${filePath.endsWith('/') ? '📁' : getFileIcon(filePath)}</span>
+            <span class="truncate">${filePath}</span>
+          </div>
+          <div class="flex items-center space-x-1 opacity-60 hover:opacity-100">
+            <button onclick="promptRename('${filePath}')" class="hover:text-blue-400 p-0.5" title="Renomear">✏️</button>
+            <button onclick="deletePath('${filePath}')" class="hover:text-rose-400 p-0.5" title="Excluir">🗑️</button>
+          </div>
+        `;
+        treeContainer.appendChild(div);
+      });
+    }
+
+    function getFileIcon(path) {
+      if (path.endsWith('.html')) return '🌐';
+      if (path.endsWith('.css')) return '🎨';
+      if (path.endsWith('.js') || path.endsWith('.ts')) return '⚡';
+      return '📄';
+    }
+
+    function selectFile(filePath) {
+      if (filePath.endsWith('/')) return; // É pasta pura
+      activeFile = filePath;
+      if (!openTabs.includes(filePath)) openTabs.push(filePath);
+      
+      renderTabs();
+      renderTree();
+      
+      const editor = document.getElementById('code-editor');
+      editor.value = project[filePath] || '';
+    }
+
+    function renderTabs() {
+      const tabsBar = document.getElementById('tabs-bar');
+      tabsBar.innerHTML = '';
+
+      openTabs.forEach(filePath => {
+        const btn = document.createElement('div');
+        const isActive = filePath === activeFile;
+        btn.className = `tab-btn px-3 py-2 border-r border-slate-800 flex items-center space-x-2 cursor-pointer select-none text-slate-400 hover:text-slate-200 ${isActive ? 'active' : ''}`;
+        btn.innerHTML = `
+          <span onclick="selectFile('${filePath}')">${filePath.split('/').pop()}</span>
+          <span onclick="closeTab('${filePath}', event)" class="hover:text-rose-400 font-bold ml-1">×</span>
+        `;
+        tabsBar.appendChild(btn);
+      });
+    }
+
+    function closeTab(filePath, event) {
+      event.stopPropagation();
+      openTabs = openTabs.filter(t => t !== filePath);
+      if (activeFile === filePath) {
+        activeFile = openTabs[openTabs.length - 1] || '';
+      }
+      renderTabs();
+      renderTree();
+      document.getElementById('code-editor').value = project[activeFile] || '';
+    }
+
+    function promptCreateFile() {
+      const name = prompt("Digite o caminho e nome do novo arquivo (ex: js/app.js ou index.html):");
+      if (name && name.trim()) {
+        const cleanName = name.trim().replace(/^\//, '');
+        if (!project[cleanName]) {
+          project[cleanName] = '';
+          selectFile(cleanName);
+          autoSaveDB();
+        } else {
+          alert('Este arquivo já existe!');
+        }
+      }
+    }
+
+    function promptCreateFolder() {
+      const folderName = prompt("Digite o nome da pasta (ex: componentes ou utils):");
+      if (folderName && folderName.trim()) {
+        const cleanFolder = folderName.trim().replace(/\/*$/, '') + '/.keep';
+        project[cleanFolder] = '';
+        renderTree();
+        autoSaveDB();
+      }
+    }
+
+    function promptRename(oldPath) {
+      const newPath = prompt("Novo nome ou caminho para o arquivo/pasta:", oldPath);
+      if (newPath && newPath.trim() && newPath !== oldPath) {
+        const cleanNew = newPath.trim();
+        project[cleanNew] = project[oldPath];
+        delete project[oldPath];
+
+        // Atualiza abas
+        openTabs = openTabs.map(t => t === oldPath ? cleanNew : t);
+        if (activeFile === oldPath) activeFile = cleanNew;
+
+        renderTabs();
+        renderTree();
+        autoSaveDB();
+        updatePreview();
+      }
+    }
+
+    function deletePath(filePath) {
+      if (confirm(`Deseja realmente excluir ${filePath}?`)) {
+        delete project[filePath];
+        openTabs = openTabs.filter(t => t !== filePath);
+        if (activeFile === filePath) activeFile = openTabs[0] || '';
+        
+        renderTabs();
+        renderTree();
+        autoSaveDB();
+        updatePreview();
+      }
+    }
+
+    function onEditorInput() {
+      if (activeFile) {
+        project[activeFile] = document.getElementById('code-editor').value;
+        autoSaveDB();
+        debouncedUpdatePreview();
+      }
+    }
+
+    // --- MONTAGEM INTELIGENTE DO PREVIEW ---
+    let debounceTimer;
+    function debouncedUpdatePreview() {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(updatePreview, 600);
+    }
+
+    function updatePreview() {
+      const frame = document.getElementById('preview-frame');
+      let htmlContent = project['index.html'] || '<h1>Nenhum index.html encontrado</h1>';
+
+      // Substitui referências de CSS locais por tags <style>
+      Object.keys(project).forEach(path => {
+        if (path.endsWith('.css')) {
+          const cssContent = project[path];
+          const fileName = path.split('/').pop();
+          // Substitui tanto pelo caminho exato quanto pelo nome relativo
+          htmlContent = htmlContent.replace(new RegExp(`<link[^>]*href=["'](?:\./)?${fileName}["'][^>]*>`, 'gi'), `<style>/* ${fileName} */
+${cssContent}</style>`);
+        }
+      });
+
+      // Substitui referências de JS locais por tags <script>
+      Object.keys(project).forEach(path => {
+        if (path.endsWith('.js') && !path.includes('cdn')) {
+          const jsContent = project[path];
+          const fileName = path.split('/').pop();
+          htmlContent = htmlContent.replace(new RegExp(`<script[^>]*src=["'](?:\./)?${fileName}["'][^>]*>\s*<\/script>`, 'gi'), `<script>/* ${fileName} */
+${jsContent}<\/script>`);
+        }
+      });
+
+      frame.srcdoc = htmlContent;
+      document.getElementById('preview-status').innerText = 'Atualizado em ' + new Date().toLocaleTimeString();
+    }
+
+    function toggleMaximizePreview() {
+      const panel = document.getElementById('preview-panel');
+      const btn = document.getElementById('max-btn');
+      panel.classList.toggle('h-1/2');
+      panel.classList.toggle('h-full');
+      panel.classList.toggle('absolute');
+      panel.classList.toggle('inset-0');
+      panel.classList.toggle('z-50');
+      btn.innerText = panel.classList.contains('h-full') ? '🗗 Restaurar' : '🗖 Maximizar';
+    }
+
+    // --- IMPORTAR & EXPORTAR ZIP ---
+    function exportZip() {
+      const zip = new JSZip();
+      Object.keys(project).forEach(path => {
+        if (!path.endsWith('.keep')) {
+          zip.file(path, project[path]);
+        }
+      });
+
+      const projName = document.getElementById('project-name').value || 'Projeto_Modular';
+      zip.generateAsync({ type: 'blob' }).then(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${projName}.zip`;
+        a.click();
+      });
+    }
+
+    function importZip(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      JSZip.loadAsync(file).then(zip => {
+        project = {};
+        const promises = [];
+
+        zip.forEach((relativePath, zipEntry) => {
+          if (!zipEntry.dir) {
+            promises.push(zipEntry.async('string').then(content => {
+              project[relativePath] = content;
+            }));
+          }
+        });
+
+        Promise.all(promises).then(() => {
+          openTabs = Object.keys(project).slice(0, 3);
+          activeFile = openTabs[0] || 'index.html';
+          renderTree();
+          renderTabs();
+          selectFile(activeFile);
+          updatePreview();
+          autoSaveDB();
+          alert('Projeto ZIP importado e organizado com sucesso!');
+        });
+      });
+    }
+
+    function unifyAndExportHTML() {
+      let finalHTML = project['index.html'] || '';
+      
+      // Embute CSS
+      Object.keys(project).forEach(path => {
+        if (path.endsWith('.css')) {
+          finalHTML = finalHTML.replace(new RegExp(`<link[^>]*href=["'](?:\./)?${path}["'][^>]*>`, 'gi'), `<style>${project[path]}</style>`);
+        }
+      });
+
+      // Embute JS
+      Object.keys(project).forEach(path => {
+        if (path.endsWith('.js')) {
+          finalHTML = finalHTML.replace(new RegExp(`<script[^>]*src=["'](?:\./)?${path}["'][^>]*>\s*<\/script>`, 'gi'), `<script>${project[path]}<\/script>`);
+        }
+      });
+
+      const blob = new Blob([finalHTML], { type: 'text/html' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${document.getElementById('project-name').value}_Unificado.html`;
+      a.click();
+    }
+
+    // --- AUTO-SAVE BANCO DE DADOS LOCAL (IndexedDB / localStorage) ---
+    function autoSaveDB() {
+      try {
+        localStorage.setItem('modular_editor_project', JSON.stringify(project));
+        localStorage.setItem('modular_editor_name', document.getElementById('project-name').value);
+      } catch(e) {
+        console.warn('Erro ao salvar no storage local', e);
+      }
+    }
+
+    function loadProjectFromDB() {
+      const saved = localStorage.getItem('modular_editor_project');
+      const savedName = localStorage.getItem('modular_editor_name');
+
+      if (saved) {
+        try {
+          project = JSON.parse(saved);
+        } catch(e) {}
+      }
+      if (savedName) document.getElementById('project-name').value = savedName;
+
+      openTabs = Object.keys(project).slice(0, 3);
+      activeFile = openTabs[0] || 'index.html';
+
+      renderTree();
+      renderTabs();
+      if (activeFile) selectFile(activeFile);
+      updatePreview();
+    }
+  </script>
+</body>
+</html>
+
